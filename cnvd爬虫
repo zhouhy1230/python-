@@ -1,0 +1,59 @@
+import re
+import requests
+import execjs
+
+
+def getCookie(data):
+    chars = len(data['chars'])
+    for i in range(chars):
+        for j in range(chars):
+            clearance = data['bts'][0] + data['chars'][i] + data['chars'][j] + data['bts'][1]
+            encrypt = None
+            if data['ha'] == 'md5':
+                encrypt = hashlib.md5()
+            elif data['ha'] == 'sha1':
+                encrypt = hashlib.sha1()
+            elif data['ha'] == 'sha256':
+                encrypt = hashlib.sha256()
+            encrypt.update(clearance.encode())
+            result = encrypt.hexdigest()
+            if result == data['ct']:
+                return clearance
+
+
+url = r'https://www.cnvd.org.cn/flaw/list.htm'
+headers = {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Cache-Control': 'max-age=0',
+    'Connection': 'keep-alive',
+    'Host': 'www.cnvd.org.cn',
+    'sec-ch-ua': '"Chromium";v="94", "Google Chrome";v="94", ";Not A Brand";v="99"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36',
+}
+from lxml.html import fromstring
+
+print(execjs.get().name)
+rs = requests.session()
+resp = rs.get(url=url, headers=headers)
+text_521 = ''.join(re.findall('<script>(.*?)</script>', resp.text))
+cookie_id = '; '.join(['='.join(item) for item in resp.cookies.items()]).split('=')[1]
+minejs = (text_521.split(';location.href=location.pathname+location.search')[0]).split('document.cookie=')[1]
+res = execjs.eval(minejs)
+s_id = (res.split(';')[0]).split('=')[1]
+cookies = '__jsluid_s=' + cookie_id + ';__jsl_clearance_s=' + s_id
+
+print(cookies)
+
+headers['Cookie'] = cookies
+response = requests.get(url, headers=headers)
+t = fromstring(response.content)
+print(response.text)
