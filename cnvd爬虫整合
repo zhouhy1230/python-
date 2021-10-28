@@ -1,0 +1,196 @@
+# -*- coding:utf-8 -*-
+import re
+import json
+import time
+import execjs
+import hashlib
+import requests
+from lxml.html import fromstring
+from requests.utils import add_dict_to_cookiejar
+
+cnvd_jump_url = 'https://www.cnvd.org.cn/flaw/list.htm'
+
+search_num_data = {
+    'number': '',
+    'startDate': '2021-10-26',
+    'endDate': '2021-10-26',
+    'field': '',
+    'order': '',
+}
+search_vul_link = {
+    'flag': 'true',
+    'number': '请输入精确编号',
+    'startDate': '2021-10-26',
+    'endDate': '2021-10-26',
+    'field': '',
+    'order': '',
+    'numPerPage': '63',
+    'offset': '0',
+    'max': '63',
+}
+vul_info_dict = {
+    "cnvd_id": "",
+    "open_data": "",
+    "hazard_level": "",
+    "involve_product": "",
+    "vul_describe": "",
+    "solution": "",
+}
+headers = {
+    'Host': 'www.cnvd.org.cn',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Referer': 'https://www.cnvd.org.cn/flaw/list.htm',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'same-origin',
+    'Sec-Fetch-User': '?1',
+    'X-Forwarded-For': '127.0.0.2',
+    'X-Originating-IP': '127.0.0.2',
+    'X-Remote-IP': '127.0.0.2',
+    'X-Remote-Addr': '127.0.0.2'
+}
+
+
+class GetMineCookie(object):
+    '''
+    该类专门获取cnvd的长连接session
+    '''
+
+    def __init__(self):
+        session = requests.session()
+        # 第一次请求获取简单js代码，通过execjs.eval()执行代码
+        res1 = session.get(url=cnvd_jump_url, headers=headers)
+        # print(session.cookies)
+        # 获取到cookieid
+        jsl_clearance_s = re.findall(r'cookie=(.*?);location', res1.text)[0]
+        jsl_clearance_s = str(execjs.eval(jsl_clearance_s)).split('=')[1].split(';')[0]
+        # print(jsl_clearance_s)
+        # 第一次调用结束
+        add_dict_to_cookiejar(session.cookies, {'__jsl_clearance_s': jsl_clearance_s})
+        # 第二次调用
+        res2 = session.get(url=cnvd_jump_url, headers=headers)
+        # print(res2.text)
+        cookie_data = json.loads(re.findall(r';go\((.*?)\)', res2.text)[0])
+        # print(data)
+        jsl_clearance_s = self.getCookie(cookie_data)
+        # 第三次调用
+        add_dict_to_cookiejar(session.cookies, {'__jsl_clearance_s': jsl_clearance_s})
+        # print(session.cookies)
+        self.session = session
+
+    def getCookie(self, data):
+        # 解密方法
+        chars = len(data['chars'])
+        for i in range(chars):
+            for j in range(chars):
+                clearance = data['bts'][0] + data['chars'][i] + data['chars'][j] + data['bts'][1]
+                encrypt = None
+                if data['ha'] == 'md5':
+                    encrypt = hashlib.md5()
+                elif data['ha'] == 'sha1':
+                    encrypt = hashlib.sha1()
+                elif data['ha'] == 'sha256':
+                    encrypt = hashlib.sha256()
+                encrypt.update(clearance.encode())
+                result = encrypt.hexdigest()
+                if result == data['ct']:
+                    return clearance
+
+    def get_vul_num(self):
+        # 获取当天漏洞数量
+        numHtml = self.session.post(url=cnvd_jump_url, headers=headers, data=search_num_data)
+        t0 = fromstring(numHtml.content)
+        vul_number_list = t0.xpath('//div[@class="pages clearfix"]/span[2]/text()')
+        vul_number_str = vul_number_list[0]
+        vul_number = re.sub(r'\D', '', vul_number_str)
+        # print(vul_number)
+        return vul_number
+
+    def get_vul_links(self):
+        # 获取当天更新漏洞链接
+        linkHtml = self.session.post(url=cnvd_jump_url, headers=headers, data=search_vul_link)
+        t1 = fromstring(linkHtml.content)
+        vul_href = t1.xpath('//tbody//a/@href')
+        # print(vul_href)
+        # print(len(vul_href))
+        return self.session, vul_href
+
+
+session, vul_hrefs = GetMineCookie().get_vul_links()
+
+print(session, vul_hrefs)
+
+import time
+
+startTime = time.time()
+
+
+def runSpidder(lis):
+    i = 0
+    err_lis = []
+    while i < len(lis):
+        cnvd_vul_url = 'https://www.cnvd.org.cn' + lis[i]
+        vul_infoHtml = session.get(url=cnvd_vul_url, headers=headers)
+        t2 = fromstring(vul_infoHtml.content)
+        vul_get_id = t2.xpath('//table[@class="gg_detail"]/tbody/tr[1]/td[2]/text()')
+        print(vul_get_id)
+        if len(vul_get_id) == 0:
+            err_lis.append(lis[i])
+        # try:
+        #     str_temp = vul_get_id[0]
+        # except IndexError:
+        #     print('索引超出')
+        #     continue
+        # vul_info_dict['cnvd_id'] = re.sub(r"\s", "", str_temp)
+        # print(vul_info_dict)
+        # #获取公开日期
+        # vul_get_data = t2.xpath('//table[@class="gg_detail"]/tbody/tr[2]/td[2]/text()')
+        # str_temp = vul_get_data[0]
+        # vul_info_dict['open_data'] = re.sub(r"\s","",str_temp)
+        #
+        #
+        # #获取危害级别
+        # vul_get_level = t2.xpath('//table[@class="gg_detail"]/tbody/tr[3]/td[2]/text()')
+        # str_vul_level = vul_get_level[0]+vul_get_level[1]+vul_get_level[2]
+        # vul_info_dict['hazard_level'] = re.sub(r"\(\)|\s","",str_vul_level)
+        #
+        #
+        # #影响产品
+        # vul_get_product = t2.xpath('//table[@class="gg_detail"]/tbody/tr[4]/td[2]/text()')
+        # str_vul_product = vul_get_product[0]+vul_get_product[1]
+        # vul_info_dict['involve_product'] = re.sub(r"\r|\n|\t","",str_vul_product)
+        #
+        #
+        # # 获取漏洞描述
+        # vul_get_true = t2.xpath('//table[@class="gg_detail"]/tbody/tr[5]/td[@class="alignRight"]/text()')
+        # if vul_get_true[0] == "CVE ID":
+        #     vul_get_describe = t2.xpath('//table[@class="gg_detail"]/tbody/tr[6]/td[2]/text()')
+        # else:
+        #     vul_get_describe = t2.xpath('//table[@class="gg_detail"]/tbody/tr[5]/td[2]/text()')
+        # str_vul_describe = vul_get_describe[0]+vul_get_describe[1]+vul_get_describe[2]+vul_get_describe[3]
+        # vul_info_dict['vul_describe'] = re.sub(r"\r|\n|\t","",str_vul_describe)
+        #
+        # #获取解决方案
+        # vul_get_true = t2.xpath('//table[@class="gg_detail"]/tbody/tr[5]/td[@class="alignRight"]/text()')
+        # if vul_get_true[0] == "CVE ID":
+        #     vul_get_solution = t2.xpath('//table[@class="gg_detail"]/tbody/tr[9]/td[2]/text()')
+        # else:
+        #     vul_get_solution = t2.xpath('//table[@class="gg_detail"]/tbody/tr[8]/td[2]/text()')
+        # str_vul_solution = vul_get_solution[0]+vul_get_solution[1]+vul_get_solution[2]
+        # vul_info_dict['solution'] = re.sub(r"\r|\n|\t","",str_vul_solution)
+        # print(vul_info_dict)
+        i += 1
+    if len(err_lis) == 0:
+        return
+    else:
+        runSpidder(err_lis)
+
+
+runSpidder(vul_hrefs)
+endTime = time.time()
+print('消耗时常：', endTime - startTime)
